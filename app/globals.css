@@ -124,3 +124,34 @@ select option {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* drop the logo's dark-grey backdrop onto pure black via screen blend */
+.brand-logo {
+  mix-blend-mode: screen;
+  filter: drop-shadow(0 0 6px rgba(120, 170, 255, 0.25));
+}
+.brand-logo--hero {
+  filter: drop-shadow(0 0 18px rgba(120, 170, 255, 0.35))
+    drop-shadow(0 0 28px rgba(160, 110, 220, 0.18));
+}
+
+/* faint centered watermark behind all content */
+.watermark {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("/logo-md.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: min(60vmin, 520px);
+  opacity: 0.07;
+  mix-blend-mode: screen;
+  filter: blur(0.4px);
+}
+@media (max-width: 640px) {
+  .watermark {
+    background-size: min(70vmin, 380px);
+    opacity: 0.06;
+  }
+}

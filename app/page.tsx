@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   FormEvent,
   KeyboardEvent,
@@ -252,18 +253,27 @@ export default function Page() {
 
   return (
     <div className="scanlines flex min-h-dvh flex-col bg-background text-foreground">
+      <div className="watermark" aria-hidden />
       {/* header */}
-      <header className="border-b border-fg-muted/60 px-3 py-2 sm:px-5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <header className="relative z-10 border-b border-fg-muted/60 px-3 py-2 sm:px-5">
+        <div className="flex flex-col items-center gap-2">
           <div className="flex items-center gap-3">
+            <Image
+              src="/logo-md.png"
+              alt="GreYat Labs"
+              width={48}
+              height={33}
+              priority
+              className="h-8 w-auto select-none brand-logo sm:h-9"
+            />
             <span className="glow text-sm sm:text-base">
-              ┌─[GreYat_Labs]─[v0.1]
-            </span>
-            <span className="hidden text-xs text-fg-dim sm:inline">
-              ── secure shell // ai terminal
+              GreYat_Labs <span className="text-fg-dim">v0.1</span>
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+          <div className="hidden text-[10px] text-fg-dim sm:block">
+            ── secure shell // ai terminal ──
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2 text-xs sm:text-sm">
             <label className="flex items-center gap-1 text-fg-dim">
               <span>model:</span>
               <select
@@ -315,20 +325,28 @@ export default function Page() {
       {/* messages */}
       <main
         ref={scrollerRef}
-        className="flex-1 overflow-y-auto px-3 py-3 sm:px-5"
+        className="relative z-10 flex-1 overflow-y-auto px-3 py-3 sm:px-5"
       >
         {messages.length === 0 && (
-          <div className="text-fg-dim">
+          <div className="flex flex-col items-center gap-3 py-6 text-center text-fg-dim sm:py-10">
+            <Image
+              src="/logo-md.png"
+              alt="GreYat Labs"
+              width={260}
+              height={178}
+              priority
+              className="brand-logo brand-logo--hero w-40 sm:w-56"
+            />
             <div className="glow">
               GreYat_Labs terminal — connected to api.freemodel.dev
             </div>
-            <div className="mt-1">
+            <div>
               type a message and press <span className="text-foreground">⏎</span>{" "}
               to send · <span className="text-foreground">shift+⏎</span> for
               newline
             </div>
             {!apiKey && (
-              <div className="mt-2 text-danger">
+              <div className="text-danger">
                 ! no api key set — paste it above to begin.
               </div>
             )}
@@ -376,7 +394,7 @@ export default function Page() {
       {/* input */}
       <form
         onSubmit={onSubmit}
-        className="border-t border-fg-muted/60 px-3 py-2 sm:px-5"
+        className="relative z-10 border-t border-fg-muted/60 px-3 py-2 sm:px-5"
       >
         <div className="flex items-end gap-2">
           <span className="select-none pb-2 text-fg-dim">
