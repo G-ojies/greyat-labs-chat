@@ -21,7 +21,6 @@ const MODELS = [
   "gemini-1.5-pro",
 ] as const;
 
-const LS_KEY_API = "greyat.apiKey";
 const LS_KEY_MODEL = "greyat.model";
 const LS_KEY_HISTORY = "greyat.history";
 
@@ -36,9 +35,7 @@ function rolePrefix(role: Role) {
 }
 
 export default function Page() {
-  const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState<(typeof MODELS)[number]>("gpt-4o-mini");
-  const [showKey, setShowKey] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -51,11 +48,9 @@ export default function Page() {
 
   // hydrate from localStorage (client-only; SSR can't access window)
   useEffect(() => {
-    let k = "";
     let m: (typeof MODELS)[number] | null = null;
     let h: Message[] | null = null;
     try {
-      k = localStorage.getItem(LS_KEY_API) ?? "";
       const rawM = localStorage.getItem(LS_KEY_MODEL);
       if (rawM && (MODELS as readonly string[]).includes(rawM)) {
         m = rawM as (typeof MODELS)[number];
@@ -69,20 +64,11 @@ export default function Page() {
       // ignore corrupt storage
     }
     /* eslint-disable react-hooks/set-state-in-effect */
-    if (k) setApiKey(k);
     if (m) setModel(m);
     if (h) setMessages(h);
     setHydrated(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
-
-  // persist
-  useEffect(() => {
-    if (!hydrated) return;
-    try {
-      localStorage.setItem(LS_KEY_API, apiKey);
-    } catch {}
-  }, [apiKey, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -114,8 +100,8 @@ export default function Page() {
   }, [input]);
 
   const canSend = useMemo(
-    () => !streaming && input.trim().length > 0 && apiKey.trim().length > 0,
-    [streaming, input, apiKey],
+    () => !streaming && input.trim().length > 0,
+    [streaming, input],
   );
 
   const stop = useCallback(() => {
@@ -133,10 +119,6 @@ export default function Page() {
   const send = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
-      if (!apiKey.trim()) {
-        setError("API key required");
-        return;
-      }
 
       setError(null);
 
@@ -155,7 +137,6 @@ export default function Page() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            apiKey: apiKey.trim(),
             model,
             messages: next.map(({ role, content }) => ({ role, content })),
           }),
@@ -235,7 +216,7 @@ export default function Page() {
         abortRef.current = null;
       }
     },
-    [apiKey, model, messages],
+    [model, messages],
   );
 
   const onSubmit = (e: FormEvent) => {
@@ -291,26 +272,6 @@ export default function Page() {
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-1 text-fg-dim">
-              <span>key:</span>
-              <input
-                type={showKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-                spellCheck={false}
-                autoComplete="off"
-                className="w-32 border border-fg-muted px-1 py-0.5 text-foreground sm:w-56"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey((s) => !s)}
-                className="border border-fg-muted px-1 py-0.5 text-fg-dim hover:text-foreground"
-                aria-label={showKey ? "hide api key" : "show api key"}
-              >
-                {showKey ? "hide" : "show"}
-              </button>
-            </label>
             <button
               type="button"
               onClick={clearHistory}
@@ -345,11 +306,6 @@ export default function Page() {
               to send · <span className="text-foreground">shift+⏎</span> for
               newline
             </div>
-            {!apiKey && (
-              <div className="text-danger">
-                ! no api key set — paste it above to begin.
-              </div>
-            )}
           </div>
         )}
 
@@ -406,9 +362,7 @@ export default function Page() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
-            placeholder={
-              apiKey ? "> message..." : "> set api key in header to start"
-            }
+            placeholder="> message..."
             spellCheck={false}
             className="block w-full resize-none border border-fg-muted bg-transparent px-2 py-1 text-foreground placeholder:text-fg-muted"
           />
@@ -431,8 +385,7 @@ export default function Page() {
           )}
         </div>
         <div className="mt-1 text-[10px] text-fg-muted sm:text-xs">
-          └── api: api.freemodel.dev/v1 · history kept locally · key never
-          leaves your browser except to call the model
+          └── api: api.freemodel.dev/v1 · history kept locally
         </div>
       </form>
     </div>

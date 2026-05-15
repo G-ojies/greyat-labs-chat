@@ -29,10 +29,16 @@ export async function POST(req: NextRequest) {
     return bad(400, "Invalid JSON body");
   }
 
-  const { apiKey, model, messages, temperature } = body;
+  const { apiKey: bodyKey, model, messages, temperature } = body;
+  const apiKey =
+    (typeof bodyKey === "string" && bodyKey.trim()) ||
+    process.env.FREEMODEL_API_KEY;
 
-  if (!apiKey || typeof apiKey !== "string") {
-    return bad(400, "Missing apiKey");
+  if (!apiKey) {
+    return bad(
+      500,
+      "No API key configured. Set FREEMODEL_API_KEY env var or send apiKey in body.",
+    );
   }
   if (!model || typeof model !== "string") {
     return bad(400, "Missing model");
