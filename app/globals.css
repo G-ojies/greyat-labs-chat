@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --foreground: #00ff66;
+  --foreground-dim: #00b34a;
+  --foreground-muted: #006d2c;
+  --accent: #39ff14;
+  --danger: #ff3b3b;
+  --user: #c8ff7a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-fg-dim: var(--foreground-dim);
+  --color-fg-muted: var(--foreground-muted);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-user: var(--user);
+  --font-mono: var(--font-mono);
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* CRT-ish glow for headings/prompts */
+.glow {
+  text-shadow: 0 0 6px rgba(0, 255, 102, 0.55), 0 0 14px rgba(0, 255, 102, 0.25);
+}
+
+/* blinking caret */
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.caret::after {
+  content: "▍";
+  margin-left: 2px;
+  animation: blink 1s steps(1) infinite;
+  color: var(--accent);
+}
+
+/* faint scanlines (only on larger viewports so it stays readable on mobile) */
+@media (min-width: 768px) {
+  .scanlines::before {
+    content: "";
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 255, 102, 0.04) 0,
+      rgba(0, 255, 102, 0.04) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    z-index: 50;
+    mix-blend-mode: screen;
+  }
+}
+
+/* scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #000;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--foreground-muted);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--foreground-dim);
+}
+
+/* form controls */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+select {
+  appearance: none;
+  background-color: #000;
+}
+select option {
+  background: #000;
+  color: var(--foreground);
+}
+
+/* selection */
+::selection {
+  background: var(--foreground);
+  color: #000;
+}
+
+/* preserve whitespace in messages */
+.msg-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

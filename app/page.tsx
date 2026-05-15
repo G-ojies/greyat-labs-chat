@@ -1,0 +1,422 @@
+"use client";
+
+import {
+  FormEvent,
+  KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+type Role = "user" | "assistant" | "system";
+type Message = { id: string; role: Role; content: string };
+
+const MODELS = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "claude-3-5-sonnet",
+  "gemini-1.5-pro",
+] as const;
+
+const LS_KEY_API = "greyat.apiKey";
+const LS_KEY_MODEL = "greyat.model";
+const LS_KEY_HISTORY = "greyat.history";
+
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function rolePrefix(role: Role) {
+  if (role === "user") return "user@greyat:~$";
+  if (role === "assistant") return "ai@greyat:~$";
+  return "sys@greyat:~$";
+}
+
+export default function Page() {
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState<(typeof MODELS)[number]>("gpt-4o-mini");
+  const [showKey, setShowKey] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // hydrate from localStorage (client-only; SSR can't access window)
+  useEffect(() => {
+    let k = "";
+    let m: (typeof MODELS)[number] | null = null;
+    let h: Message[] | null = null;
+    try {
+      k = localStorage.getItem(LS_KEY_API) ?? "";
+      const rawM = localStorage.getItem(LS_KEY_MODEL);
+      if (rawM && (MODELS as readonly string[]).includes(rawM)) {
+        m = rawM as (typeof MODELS)[number];
+      }
+      const rawH = localStorage.getItem(LS_KEY_HISTORY);
+      if (rawH) {
+        const parsed = JSON.parse(rawH) as Message[];
+        if (Array.isArray(parsed)) h = parsed;
+      }
+    } catch {
+      // ignore corrupt storage
+    }
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (k) setApiKey(k);
+    if (m) setModel(m);
+    if (h) setMessages(h);
+    setHydrated(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  // persist
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(LS_KEY_API, apiKey);
+    } catch {}
+  }, [apiKey, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(LS_KEY_MODEL, model);
+    } catch {}
+  }, [model, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(LS_KEY_HISTORY, JSON.stringify(messages));
+    } catch {}
+  }, [messages, hydrated]);
+
+  // autoscroll on new content
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, streaming]);
+
+  // auto-grow textarea
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 240) + "px";
+  }, [input]);
+
+  const canSend = useMemo(
+    () => !streaming && input.trim().length > 0 && apiKey.trim().length > 0,
+    [streaming, input, apiKey],
+  );
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    if (streaming) stop();
+    setMessages([]);
+    setError(null);
+  }, [streaming, stop]);
+
+  const send = useCallback(
+    async (text: string) => {
+      if (!text.trim()) return;
+      if (!apiKey.trim()) {
+        setError("API key required");
+        return;
+      }
+
+      setError(null);
+
+      const userMsg: Message = { id: uid(), role: "user", content: text };
+      const assistantMsg: Message = { id: uid(), role: "assistant", content: "" };
+      const next = [...messages, userMsg];
+      setMessages([...next, assistantMsg]);
+      setInput("");
+      setStreaming(true);
+
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: apiKey.trim(),
+            model,
+            messages: next.map(({ role, content }) => ({ role, content })),
+          }),
+          signal: ctrl.signal,
+        });
+
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            detail = j.error || detail;
+            if (j.detail) detail += ` — ${j.detail}`;
+          } catch {}
+          throw new Error(detail);
+        }
+        if (!res.body) throw new Error("Empty response body");
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let acc = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE: split on double newline
+          const events = buffer.split("\n\n");
+          buffer = events.pop() ?? "";
+
+          for (const evt of events) {
+            const lines = evt.split("\n");
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data:")) continue;
+              const data = trimmed.slice(5).trim();
+              if (!data || data === "[DONE]") continue;
+              try {
+                const json = JSON.parse(data);
+                const delta: string =
+                  json?.choices?.[0]?.delta?.content ??
+                  json?.choices?.[0]?.message?.content ??
+                  "";
+                if (delta) {
+                  acc += delta;
+                  setMessages((prev) => {
+                    const copy = prev.slice();
+                    const last = copy[copy.length - 1];
+                    if (last && last.id === assistantMsg.id) {
+                      copy[copy.length - 1] = { ...last, content: acc };
+                    }
+                    return copy;
+                  });
+                }
+              } catch {
+                // ignore parse error for non-JSON keepalive lines
+              }
+            }
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg !== "AbortError" && !/aborted/i.test(msg)) {
+          setError(msg);
+          setMessages((prev) => {
+            const copy = prev.slice();
+            const last = copy[copy.length - 1];
+            if (last && last.id === assistantMsg.id && !last.content) {
+              copy.pop();
+            }
+            return copy;
+          });
+        }
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
+      }
+    },
+    [apiKey, model, messages],
+  );
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!canSend) return;
+    void send(input);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (canSend) void send(input);
+    }
+  };
+
+  return (
+    <div className="scanlines flex min-h-dvh flex-col bg-background text-foreground">
+      {/* header */}
+      <header className="border-b border-fg-muted/60 px-3 py-2 sm:px-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="glow text-sm sm:text-base">
+              ┌─[GreYat_Labs]─[v0.1]
+            </span>
+            <span className="hidden text-xs text-fg-dim sm:inline">
+              ── secure shell // ai terminal
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+            <label className="flex items-center gap-1 text-fg-dim">
+              <span>model:</span>
+              <select
+                value={model}
+                onChange={(e) =>
+                  setModel(e.target.value as (typeof MODELS)[number])
+                }
+                className="border border-fg-muted px-1 py-0.5 text-foreground"
+                disabled={streaming}
+              >
+                {MODELS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1 text-fg-dim">
+              <span>key:</span>
+              <input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+                spellCheck={false}
+                autoComplete="off"
+                className="w-32 border border-fg-muted px-1 py-0.5 text-foreground sm:w-56"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((s) => !s)}
+                className="border border-fg-muted px-1 py-0.5 text-fg-dim hover:text-foreground"
+                aria-label={showKey ? "hide api key" : "show api key"}
+              >
+                {showKey ? "hide" : "show"}
+              </button>
+            </label>
+            <button
+              type="button"
+              onClick={clearHistory}
+              className="border border-fg-muted px-2 py-0.5 text-fg-dim hover:text-danger"
+            >
+              :clear
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* messages */}
+      <main
+        ref={scrollerRef}
+        className="flex-1 overflow-y-auto px-3 py-3 sm:px-5"
+      >
+        {messages.length === 0 && (
+          <div className="text-fg-dim">
+            <div className="glow">
+              GreYat_Labs terminal — connected to api.freemodel.dev
+            </div>
+            <div className="mt-1">
+              type a message and press <span className="text-foreground">⏎</span>{" "}
+              to send · <span className="text-foreground">shift+⏎</span> for
+              newline
+            </div>
+            {!apiKey && (
+              <div className="mt-2 text-danger">
+                ! no api key set — paste it above to begin.
+              </div>
+            )}
+          </div>
+        )}
+
+        <ul className="flex flex-col gap-3">
+          {messages.map((m, i) => {
+            const isLast = i === messages.length - 1;
+            const isAssistant = m.role === "assistant";
+            const showCaret = streaming && isAssistant && isLast;
+            return (
+              <li key={m.id} className="leading-relaxed">
+                <div
+                  className={
+                    m.role === "user"
+                      ? "text-user"
+                      : m.role === "assistant"
+                        ? "text-foreground"
+                        : "text-fg-dim"
+                  }
+                >
+                  <span className="text-fg-dim">{rolePrefix(m.role)}</span>{" "}
+                  <span
+                    className={`msg-body ${showCaret && !m.content ? "caret" : ""}`}
+                  >
+                    {m.content}
+                    {showCaret && m.content ? (
+                      <span className="caret" />
+                    ) : null}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        {error && (
+          <div className="mt-3 border border-danger px-2 py-1 text-danger">
+            ! {error}
+          </div>
+        )}
+      </main>
+
+      {/* input */}
+      <form
+        onSubmit={onSubmit}
+        className="border-t border-fg-muted/60 px-3 py-2 sm:px-5"
+      >
+        <div className="flex items-end gap-2">
+          <span className="select-none pb-2 text-fg-dim">
+            user@greyat:~${" "}
+          </span>
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={1}
+            placeholder={
+              apiKey ? "> message..." : "> set api key in header to start"
+            }
+            spellCheck={false}
+            className="block w-full resize-none border border-fg-muted bg-transparent px-2 py-1 text-foreground placeholder:text-fg-muted"
+          />
+          {streaming ? (
+            <button
+              type="button"
+              onClick={stop}
+              className="border border-danger px-3 py-1 text-danger"
+            >
+              stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="border border-accent px-3 py-1 text-accent disabled:cursor-not-allowed disabled:border-fg-muted disabled:text-fg-muted"
+            >
+              send
+            </button>
+          )}
+        </div>
+        <div className="mt-1 text-[10px] text-fg-muted sm:text-xs">
+          └── api: api.freemodel.dev/v1 · history kept locally · key never
+          leaves your browser except to call the model
+        </div>
+      </form>
+    </div>
+  );
+}
