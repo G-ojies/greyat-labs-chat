@@ -34,6 +34,16 @@ function rolePrefix(role: Role) {
   return "sys@greyat:~$";
 }
 
+const GREETING_LINES = [
+  "[boot] initializing GreYat_Labs terminal v0.1 ...",
+  "[net]  uplink :: api.freemodel.dev/v1 :: OK",
+  "[sec]  session secure // local history enabled",
+  "",
+  "welcome, operator.",
+  "ask me anything — type below and press ⏎ to begin.",
+];
+const GREETING_TEXT = GREETING_LINES.join("\n");
+
 export default function Page() {
   const [model, setModel] = useState<(typeof MODELS)[number]>("gpt-4o-mini");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -41,6 +51,7 @@ export default function Page() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [typedChars, setTypedChars] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -76,6 +87,18 @@ export default function Page() {
       localStorage.setItem(LS_KEY_MODEL, model);
     } catch {}
   }, [model, hydrated]);
+
+  // typewriter greeting — only animates while the chat is empty
+  useEffect(() => {
+    if (!hydrated) return;
+    if (messages.length > 0) return;
+    if (typedChars >= GREETING_TEXT.length) return;
+    const next = GREETING_TEXT[typedChars];
+    // newlines and spaces resolve instantly so the cadence feels natural
+    const delay = next === "\n" ? 60 : next === " " ? 8 : 18;
+    const id = window.setTimeout(() => setTypedChars((c) => c + 1), delay);
+    return () => window.clearTimeout(id);
+  }, [typedChars, hydrated, messages.length]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -289,23 +312,11 @@ export default function Page() {
         className="relative z-10 flex-1 overflow-y-auto px-3 py-3 sm:px-5"
       >
         {messages.length === 0 && (
-          <div className="flex flex-col items-center gap-3 py-6 text-center text-fg-dim sm:py-10">
-            <Image
-              src="/logo-md.png"
-              alt="GreYat Labs"
-              width={260}
-              height={178}
-              priority
-              className="brand-logo brand-logo--hero w-40 sm:w-56"
-            />
-            <div className="glow">
-              GreYat_Labs terminal — connected to api.freemodel.dev
-            </div>
-            <div>
-              type a message and press <span className="text-foreground">⏎</span>{" "}
-              to send · <span className="text-foreground">shift+⏎</span> for
-              newline
-            </div>
+          <div className="msg-body py-4 text-fg-dim sm:py-6">
+            <span className="glow text-foreground">
+              {GREETING_TEXT.slice(0, typedChars)}
+            </span>
+            {typedChars < GREETING_TEXT.length && <span className="caret" />}
           </div>
         )}
 
