@@ -5,7 +5,13 @@ export const dynamic = "force-dynamic";
 
 const UPSTREAM = "https://api.freemodel.dev/v1/chat/completions";
 
-type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
+type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+type ChatMessage = {
+  role: "user" | "assistant" | "system";
+  content: string | ContentPart[];
+};
 
 type ChatRequestBody = {
   apiKey?: string;

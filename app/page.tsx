@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ChangeEvent,
+  ClipboardEvent,
   FormEvent,
   KeyboardEvent,
   useCallback,
@@ -11,7 +13,13 @@ import {
 } from "react";
 
 type Role = "user" | "assistant" | "system";
-type Message = { id: string; role: Role; content: string };
+type Attachment = { id: string; name: string; dataUrl: string };
+type Message = {
+  id: string;
+  role: Role;
+  content: string;
+  images?: Attachment[];
+};
 
 const MODELS = [
   "gpt-4o",
@@ -23,6 +31,10 @@ const MODELS = [
 const LS_KEY_MODEL = "greyat.model";
 const LS_KEY_HISTORY = "greyat.history";
 
+const MAX_IMAGES_PER_MESSAGE = 4;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB raw per image
+const ACCEPT_TYPES = "image/png,image/jpeg,image/webp,image/gif";
+
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -33,6 +45,15 @@ function rolePrefix(role: Role) {
   return "sys@greyat:~$";
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error ?? new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
 const GREETING_LINES = [
   "[boot] initializing GreYat_Labs terminal v0.1 ...",
   "[net]  uplink :: api.freemodel.dev/v1 :: OK",
@@ -40,6 +61,7 @@ const GREETING_LINES = [
   "",
   "welcome, operator.",
   "ask me anything — type below and press ⏎ to begin.",
+  "tip: paste or attach images to query them.",
 ];
 const GREETING_TEXT = GREETING_LINES.join("\n");
 
@@ -47,6 +69,7 @@ export default function Page() {
   const [model, setModel] = useState<(typeof MODELS)[number]>("gpt-4o-mini");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -55,6 +78,7 @@ export default function Page() {
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // hydrate from localStorage (client-only; SSR can't access window)
   useEffect(() => {
@@ -93,7 +117,6 @@ export default function Page() {
     if (messages.length > 0) return;
     if (typedChars >= GREETING_TEXT.length) return;
     const next = GREETING_TEXT[typedChars];
-    // newlines and spaces resolve instantly so the cadence feels natural
     const delay = next === "\n" ? 60 : next === " " ? 8 : 18;
     const id = window.setTimeout(() => setTypedChars((c) => c + 1), delay);
     return () => window.clearTimeout(id);
@@ -103,7 +126,13 @@ export default function Page() {
     if (!hydrated) return;
     try {
       localStorage.setItem(LS_KEY_HISTORY, JSON.stringify(messages));
-    } catch {}
+    } catch {
+      // QuotaExceeded — base64 images can blow the ~5 MB localStorage cap.
+      // Best-effort: drop history rather than crash the UI.
+      try {
+        localStorage.removeItem(LS_KEY_HISTORY);
+      } catch {}
+    }
   }, [messages, hydrated]);
 
   // autoscroll on new content
@@ -122,8 +151,10 @@ export default function Page() {
   }, [input]);
 
   const canSend = useMemo(
-    () => !streaming && input.trim().length > 0,
-    [streaming, input],
+    () =>
+      !streaming &&
+      (input.trim().length > 0 || pendingImages.length > 0),
+    [streaming, input, pendingImages.length],
   );
 
   const stop = useCallback(() => {
@@ -138,30 +169,130 @@ export default function Page() {
     setError(null);
   }, [streaming, stop]);
 
+  const addFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const arr = Array.from(files);
+      if (arr.length === 0) return;
+
+      const slotsLeft = MAX_IMAGES_PER_MESSAGE - pendingImages.length;
+      if (slotsLeft <= 0) {
+        setError(`max ${MAX_IMAGES_PER_MESSAGE} images per message`);
+        return;
+      }
+
+      const accepted: Attachment[] = [];
+      const rejections: string[] = [];
+
+      for (const f of arr.slice(0, slotsLeft)) {
+        if (!f.type.startsWith("image/")) {
+          rejections.push(`${f.name}: not an image`);
+          continue;
+        }
+        if (f.size > MAX_IMAGE_BYTES) {
+          rejections.push(
+            `${f.name}: ${(f.size / 1024 / 1024).toFixed(1)}MB > 4MB limit`,
+          );
+          continue;
+        }
+        try {
+          const dataUrl = await readFileAsDataUrl(f);
+          accepted.push({
+            id: uid(),
+            name: f.name || "pasted-image",
+            dataUrl,
+          });
+        } catch {
+          rejections.push(`${f.name}: read failed`);
+        }
+      }
+
+      if (accepted.length > 0) {
+        setPendingImages((prev) => [...prev, ...accepted]);
+        setError(null);
+      }
+      if (rejections.length > 0) {
+        setError(rejections.join("; "));
+      }
+    },
+    [pendingImages.length],
+  );
+
+  const removePending = useCallback((id: string) => {
+    setPendingImages((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) void addFiles(e.target.files);
+    // reset so the same file can be re-selected later
+    e.target.value = "";
+  };
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === "file") {
+        const f = it.getAsFile();
+        if (f && f.type.startsWith("image/")) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  };
+
   const send = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
+    async (text: string, images: Attachment[]) => {
+      const trimmed = text.trim();
+      if (!trimmed && images.length === 0) return;
 
       setError(null);
 
-      const userMsg: Message = { id: uid(), role: "user", content: text };
-      const assistantMsg: Message = { id: uid(), role: "assistant", content: "" };
+      const userMsg: Message = {
+        id: uid(),
+        role: "user",
+        content: trimmed,
+        ...(images.length > 0 ? { images } : {}),
+      };
+      const assistantMsg: Message = {
+        id: uid(),
+        role: "assistant",
+        content: "",
+      };
       const next = [...messages, userMsg];
       setMessages([...next, assistantMsg]);
       setInput("");
+      setPendingImages([]);
       setStreaming(true);
 
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
+      // serialize messages for upstream — multimodal content for any
+      // message that carries images
+      const wireMessages = next.map((m) => {
+        if (m.role === "user" && m.images && m.images.length > 0) {
+          const parts: Array<
+            | { type: "text"; text: string }
+            | { type: "image_url"; image_url: { url: string } }
+          > = [];
+          if (m.content) parts.push({ type: "text", text: m.content });
+          for (const img of m.images) {
+            parts.push({ type: "image_url", image_url: { url: img.dataUrl } });
+          }
+          return { role: m.role, content: parts };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model,
-            messages: next.map(({ role, content }) => ({ role, content })),
-          }),
+          body: JSON.stringify({ model, messages: wireMessages }),
           signal: ctrl.signal,
         });
 
@@ -186,16 +317,15 @@ export default function Page() {
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
 
-          // SSE: split on double newline
           const events = buffer.split("\n\n");
           buffer = events.pop() ?? "";
 
           for (const evt of events) {
             const lines = evt.split("\n");
             for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith("data:")) continue;
-              const data = trimmed.slice(5).trim();
+              const trimmedLine = line.trim();
+              if (!trimmedLine.startsWith("data:")) continue;
+              const data = trimmedLine.slice(5).trim();
               if (!data || data === "[DONE]") continue;
               try {
                 const json = JSON.parse(data);
@@ -215,7 +345,7 @@ export default function Page() {
                   });
                 }
               } catch {
-                // ignore parse error for non-JSON keepalive lines
+                // ignore keepalive / non-JSON
               }
             }
           }
@@ -244,13 +374,13 @@ export default function Page() {
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!canSend) return;
-    void send(input);
+    void send(input, pendingImages);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (canSend) void send(input);
+      if (canSend) void send(input, pendingImages);
     }
   };
 
@@ -334,6 +464,28 @@ export default function Page() {
                     ) : null}
                   </span>
                 </div>
+                {m.images && m.images.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2 pl-6">
+                    {m.images.map((img) => (
+                      <a
+                        key={img.id}
+                        href={img.dataUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block border border-fg-muted hover:border-accent"
+                        title={img.name}
+                      >
+                        {/* plain img: data URLs don't go through next/image */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.dataUrl}
+                          alt={img.name}
+                          className="block max-h-48 max-w-[280px] object-contain"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -351,6 +503,33 @@ export default function Page() {
         onSubmit={onSubmit}
         className="relative z-10 border-t border-fg-muted/60 px-3 py-2 sm:px-5"
       >
+        {pendingImages.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pendingImages.map((p) => (
+              <div
+                key={p.id}
+                className="relative border border-fg-muted p-1"
+                title={p.name}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.dataUrl}
+                  alt={p.name}
+                  className="block h-16 w-16 object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removePending(p.id)}
+                  className="absolute -right-2 -top-2 border border-danger bg-background px-1 text-[10px] leading-none text-danger hover:bg-danger hover:text-background"
+                  aria-label={`remove ${p.name}`}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
           <span className="select-none pb-2 text-fg-dim">
             user@greyat:~${" "}
@@ -360,11 +539,31 @@ export default function Page() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             rows={1}
-            placeholder="> message..."
+            placeholder="> message... (paste or attach images)"
             spellCheck={false}
             className="block w-full resize-none border border-fg-muted bg-transparent px-2 py-1 text-foreground placeholder:text-fg-muted"
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPT_TYPES}
+            multiple
+            onChange={onFileInputChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={
+              streaming || pendingImages.length >= MAX_IMAGES_PER_MESSAGE
+            }
+            className="border border-fg-muted px-3 py-1 text-fg-dim hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-fg-muted disabled:hover:text-fg-dim"
+            title="attach image"
+          >
+            [+]
+          </button>
           {streaming ? (
             <button
               type="button"
@@ -384,7 +583,8 @@ export default function Page() {
           )}
         </div>
         <div className="mt-1 text-[10px] text-fg-muted sm:text-xs">
-          └── api: api.freemodel.dev/v1 · history kept locally
+          └── api: api.freemodel.dev/v1 · history kept locally · images ≤ 4MB ·
+          max {MAX_IMAGES_PER_MESSAGE}/msg
         </div>
       </form>
     </div>
