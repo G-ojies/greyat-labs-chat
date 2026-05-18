@@ -135,8 +135,8 @@ select option {
     drop-shadow(0 0 28px rgba(160, 110, 220, 0.18));
 }
 
-/* full-bleed faint logo background — fills the viewport, sits behind all
-   content as a transparent brand mark */
+/* full-bleed logo background — fills the viewport, sits behind all
+   content as the dominant brand mark */
 .watermark {
   position: fixed;
   inset: 0;
@@ -145,13 +145,13 @@ select option {
   background-image: url("/logo.png");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
-  opacity: 0.08;
+  background-size: cover;
+  opacity: 0.28;
   mix-blend-mode: screen;
+  filter: drop-shadow(0 0 24px rgba(0, 255, 102, 0.15));
 }
 @media (max-width: 640px) {
   .watermark {
-    background-size: 140% auto;
-    opacity: 0.07;
+    opacity: 0.22;
   }
 }

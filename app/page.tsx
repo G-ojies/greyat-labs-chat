@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   FormEvent,
   KeyboardEvent,
@@ -258,26 +257,13 @@ export default function Page() {
   return (
     <div className="scanlines flex min-h-dvh flex-col bg-background text-foreground">
       <div className="watermark" aria-hidden />
-      {/* header */}
+      {/* header — minimal control bar; brand lives in the watermark */}
       <header className="relative z-10 border-b border-fg-muted/60 px-3 py-2 sm:px-5">
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex items-center gap-3">
-            <Image
-              src="/logo-md.png"
-              alt="GreYat Labs"
-              width={48}
-              height={33}
-              priority
-              className="h-8 w-auto select-none brand-logo sm:h-9"
-            />
-            <span className="glow text-sm sm:text-base">
-              GreYat_Labs <span className="text-fg-dim">v0.1</span>
-            </span>
-          </div>
-          <div className="hidden text-[10px] text-fg-dim sm:block">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm">
+          <div className="text-[10px] text-fg-dim sm:text-xs">
             ── secure shell // ai terminal ──
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2 text-xs sm:text-sm">
+          <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1 text-fg-dim">
               <span>model:</span>
               <select
@@ -298,9 +284,11 @@ export default function Page() {
             <button
               type="button"
               onClick={clearHistory}
-              className="border border-fg-muted px-2 py-0.5 text-fg-dim hover:text-danger"
+              disabled={messages.length === 0 && !streaming}
+              className="border border-danger px-2 py-0.5 text-danger transition-colors hover:bg-danger hover:text-background disabled:cursor-not-allowed disabled:border-fg-muted disabled:text-fg-muted disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+              title="clear chat history"
             >
-              :clear
+              [ clear chat ]
             </button>
           </div>
         </div>
